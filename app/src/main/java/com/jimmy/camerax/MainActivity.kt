@@ -27,6 +27,7 @@ import android.widget.Toast
 import androidx.camera.core.*
 import androidx.camera.extensions.BokehImageCaptureExtender
 import androidx.camera.core.ImageCapture.Metadata
+import androidx.camera.view.TextureViewMeteringPointFactory
 import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -145,18 +146,21 @@ class MainActivity : AppCompatActivity() {
             (activities, services, etc).
          */
         mainExecutorr = ContextCompat.getMainExecutor(baseContext)
+
+        broadcastManager = LocalBroadcastManager.getInstance(this)
+        displayManager = viewFinder.context
+            .getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
         // Request camera permissions
         if (allPermissionsGranted()) {
 
-            broadcastManager = LocalBroadcastManager.getInstance(this)
+
 
             // Set up the intent filter that will receive events
             val filter = IntentFilter().apply { addAction(KEY_EVENT_ACTION) }
             broadcastManager.registerReceiver(volumeDownReceiver, filter)
 
             // Every time the orientation of device changes, recompute layout
-            displayManager = viewFinder.context
-                .getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+
             displayManager.registerDisplayListener(displayListener, null)
 
             // Determine the output directory
@@ -209,7 +213,7 @@ class MainActivity : AppCompatActivity() {
         val preview = setupPreview(screenAspectRatio)
 
         // Build the image capture use case and attach button click listener
-        val imageCapture = setupCamera (screenAspectRatio)
+         imageCapture = setupCamera (screenAspectRatio)
 
         // Build the image analysis use case and instantiate our analyzer
         val analyzerUseCase = setupImageAnalyzer()
@@ -305,8 +309,8 @@ class MainActivity : AppCompatActivity() {
 
     /** Define callback that will be triggered after a photo has been taken and saved to disk */
     private val imageSavedListener = object : ImageCapture.OnImageSavedListener {
-        override fun onError( imageCaptureError: ImageCapture.ImageCaptureError, message: String,
-            exc: Throwable? ) {
+        override fun onError( imageCaptureError: ImageCapture.ImageCaptureError,
+                              message: String, exc: Throwable? ) {
             val msg = "Photo capture failed: $message"
             Log.e("CameraXApp", msg, exc)
             viewFinder.post {
@@ -356,6 +360,7 @@ class MainActivity : AppCompatActivity() {
             isReversedHorizontal = lensFacing == CameraX.LensFacing.FRONT
         }
 
+        Log.e("jjjjjjj", "$imageCapture")
         imageCapture?.takePicture(photoFile, metadata, mainExecutorr, imageSavedListener)
 
         // We can only change the foreground Drawable using API level 23+ API
@@ -390,7 +395,7 @@ class MainActivity : AppCompatActivity() {
                 setupCameraUseCases()
             }
         } catch (exc: Exception) {
-            // Do nothing
+            Log.e("changeCameraBtnClick", "${exc.message}")
         }
     }
 
@@ -427,12 +432,8 @@ class MainActivity : AppCompatActivity() {
     ) {
         if (requestCode == REQUEST_CODE_PERMISSIONS) {
             if (allPermissionsGranted()) {
-                viewFinder.post { setupCameraUseCases() }
-            } else {
-                Toast.makeText(this,
-                    "Permissions not granted by the user.",
-                    Toast.LENGTH_SHORT).show()
-                finish()
+                viewFinder.post {
+                    setupCameraUseCases() }
             }
         }
     }
@@ -442,8 +443,7 @@ class MainActivity : AppCompatActivity() {
      * Check if all permission specified in the manifest have been granted
      */
     private fun allPermissionsGranted() = permissions.all {
-        ContextCompat.checkSelfPermission(
-            baseContext, it) == PackageManager.PERMISSION_GRANTED
+        ContextCompat.checkSelfPermission(  baseContext, it) == PackageManager.PERMISSION_GRANTED
     }
 
 
@@ -544,7 +544,7 @@ class MainActivity : AppCompatActivity() {
 
 
     /** Use external media if it is available, our app's file directory otherwise */
-    fun getOutputDirectory(context: Context): File {
+    private fun getOutputDirectory(context: Context): File {
         val appContext = context.applicationContext
         val mediaDir = context.externalMediaDirs.firstOrNull()?.let {
             File(it, appContext.resources.getString(R.string.app_name)).apply { mkdirs() } }
@@ -567,7 +567,7 @@ class MainActivity : AppCompatActivity() {
     private fun aspectRatio(width: Int, height: Int): AspectRatio {
         val previewRatio = max(width, height).toDouble() / min(width, height)
 
-        if (abs(previewRatio - RATIO_4_3_VALUE) <= abs(previewRatio - RATIO_16_9_VALUE)) {
+        if (kotlin.math.abs(previewRatio - RATIO_4_3_VALUE) <= abs(previewRatio - RATIO_16_9_VALUE)) {
             return AspectRatio.RATIO_4_3
         }
         return AspectRatio.RATIO_16_9
@@ -636,4 +636,57 @@ class MainActivity : AppCompatActivity() {
         //
     }
 
+    /*
+        camera controls implementation
+     */
+
+    fun cameraControlsSetup(){
+        /*
+            An API that allows you to control the camera directly, independently of the use cases.
+            This is useful for configuring things such as the camera’s zoom,
+            focus and metering across all use cases.
+         */
+        val cameraControl = CameraX.getCameraControl(lensFacing)
+
+        /*
+        An API that provides camera related information, such as the zoom ratio,
+        the zoom percentage, the sensor rotation degrees and flash availability.
+         */
+        val cameraInfo = CameraX.getCameraInfo(lensFacing)
+    }
+
+
+    private fun setUpTapToFocus(cameraControl : CameraControl) {
+        viewFinder.setOnTouchListener { _, event ->
+            if (event.action != MotionEvent.ACTION_UP) {
+                return@setOnTouchListener false
+            }
+
+            val factory = TextureViewMeteringPointFactory(viewFinder)
+            val point = factory.createPoint(event.x, event.y)
+            val action = FocusMeteringAction.Builder.from(point).build()
+            cameraControl.startFocusAndMetering(action)
+            return@setOnTouchListener true
+        }
+    }
+
+    private fun setUpPinchToZoom(context:Context, cameraControl : CameraControl, cameraInfo : CameraInfo) {
+      /*  val listener = object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScale(detector: ScaleGestureDetector): Boolean {
+                val currentZoomRatio: Float = cameraInfo.zoomRatio.value ?: 0F
+                val delta = detector.scaleFactor
+                cameraControl.setZoomRatio(currentZoomRatio * delta)
+                return true
+            }
+        }
+
+        val scaleGestureDetector = ScaleGestureDetector(context, listener)
+
+        viewFinder.setOnTouchListener { _, event ->
+            scaleGestureDetector.onTouchEvent(event)
+            return@setOnTouchListener true
+        }*/
+    }
+
+    
 }
